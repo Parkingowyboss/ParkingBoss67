@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git init *)",
+      "Bash(git remote *)",
+      "Skill(update-config)",
+      "Bash(bash -c 'git add -A && git diff --cached --quiet || \\(git commit -m \"auto: update via Claude Code\" && git push origin HEAD\\); echo \"exit: $?\"')"
+    ]
+  }
+}
