@@ -1,0 +1,26 @@
+{
+  "name": "parkingboss-backend",
+  "version": "0.1.0",
+  "description": "ParkingBoss API — locations of parking, EV chargers and gas stations in Warsaw",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "db:migrate": "node src/db/migrate.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "compression": "^1.7.4",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-rate-limit": "^7.4.0",
+    "helmet": "^7.1.0",
+    "pg": "^8.12.0"
+  },
+  "license": "MIT"
+}
