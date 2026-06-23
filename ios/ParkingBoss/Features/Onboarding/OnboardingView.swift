@@ -5,6 +5,7 @@ import SwiftUI
 struct OnboardingView: View {
     @EnvironmentObject private var settings: AppSettings
     @EnvironmentObject private var locationManager: LocationManager
+    @Environment(\.dismiss) private var dismiss
     @State private var page = 0
 
     private struct Page {
@@ -67,6 +68,7 @@ struct OnboardingView: View {
         } else {
             locationManager.requestPermission()
             settings.hasOnboarded = true
+            dismiss()
         }
     }
 }
