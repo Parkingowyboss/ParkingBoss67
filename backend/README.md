@@ -56,7 +56,9 @@ python import_openchargemap.py   # EV chargers from OpenChargeMap
 `type` values: `parking_public`, `parking_private`, `ev_charger`, `gas_station`.
 `status` values (stalls): `free`, `occupied`, `unknown`.
 
-Load individual stalls with `python import_parking_spaces.py` (OSM `amenity=parking_space`).
+Load individual stalls:
+- `python import_parking_spaces.py` — mapped stalls (OSM `amenity=parking_space`)
+- `python generate_street_spaces.py` — on-street stalls generated from road parking lanes (full refresh of `source='street'`)
 
 Example:
 
