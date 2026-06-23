@@ -23,12 +23,18 @@ def fetch():
     api_key = os.environ.get("OCM_API_KEY", "")
     if not api_key:
         print("[ocm] WARNING: OCM_API_KEY not set; requests may be rate-limited or rejected", file=sys.stderr)
-    # OCM uses (lat, lng) center + distance, or a bounding box param.
+    # Centre of the Warsaw bbox + a radius that covers the whole city.
+    # (lat/lng + distance is far more reliable than OCM's boundingbox param.)
     s, w, n, e = WARSAW_BBOX
+    center_lat = (s + n) / 2
+    center_lng = (w + e) / 2
     params = {
         "output": "json",
         "countrycode": "PL",
-        "boundingbox": f"({n},{w}),({s},{e})",  # (topright? OCM: (lat,lng),(lat,lng))
+        "latitude": center_lat,
+        "longitude": center_lng,
+        "distance": 25,
+        "distanceunit": "KM",
         "maxresults": 5000,
         "compact": "true",
         "verbose": "false",
