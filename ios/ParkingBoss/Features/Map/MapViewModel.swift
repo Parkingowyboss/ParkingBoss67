@@ -7,8 +7,15 @@ import MapKit
 @MainActor
 final class MapViewModel: ObservableObject {
     @Published var locations: [Location] = []
+    /// Individual stalls in the current viewport (only when zoomed in).
+    @Published var spaces: [ParkingSpace] = []
     @Published var isLoading = false
     @Published var errorMessage: String?
+
+    /// Stalls render only once the map is zoomed in past this span (~1.3 km tall).
+    static let spacesZoomThreshold = 0.012
+    /// Backend rejects bboxes larger than this per side; keep requests under it.
+    private static let maxBboxDeg = 0.055
 
     /// Selected filter group labels. Empty == show everything.
     @Published var activeFilters: Set<String> = []
@@ -62,5 +69,40 @@ final class MapViewModel: ObservableObject {
             if moved < threshold { return }
         }
         await load(center: center, radius: radius)
+    }
+
+    /// Whether individual stalls should be shown for this region.
+    func shouldShowSpaces(for region: MKCoordinateRegion) -> Bool {
+        region.span.latitudeDelta <= Self.spacesZoomThreshold
+    }
+
+    /// Load stalls for the visible rectangle; clears them when zoomed out.
+    func loadSpaces(for region: MKCoordinateRegion) async {
+        guard shouldShowSpaces(for: region) else {
+            if !spaces.isEmpty { spaces = [] }
+            return
+        }
+        // Build a bbox from the region, clamped to the backend's max side length.
+        let halfLat = min(region.span.latitudeDelta / 2, Self.maxBboxDeg / 2)
+        let halfLng = min(region.span.longitudeDelta / 2, Self.maxBboxDeg / 2)
+        let c = region.center
+        let bbox = (
+            minLng: c.longitude - halfLng,
+            minLat: c.latitude - halfLat,
+            maxLng: c.longitude + halfLng,
+            maxLat: c.latitude + halfLat
+        )
+        do {
+            spaces = try await api.spaces(bbox: bbox)
+        } catch {
+            // Non-fatal: keep whatever stalls we already have.
+        }
+    }
+
+    /// Replace a stall in place after a report updates its status.
+    func apply(_ updated: ParkingSpace) {
+        if let i = spaces.firstIndex(where: { $0.id == updated.id }) {
+            spaces[i] = updated
+        }
     }
 }

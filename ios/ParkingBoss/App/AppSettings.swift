@@ -32,6 +32,10 @@ final class AppSettings: ObservableObject {
     /// Selectable search radii in metres, for the settings picker.
     static let radiusOptions: [Double] = [200, 500, 1000, 2000]
 
+    /// Anonymous, stable per-install id used to attribute occupancy reports
+    /// (no account required).
+    let clientId: String
+
     private let defaults: UserDefaults
 
     private enum Keys {
@@ -39,6 +43,7 @@ final class AppSettings: ObservableObject {
         static let notifications = "settings.notifications"
         static let appearance = "settings.appearance"
         static let onboarded = "settings.onboarded"
+        static let clientId = "settings.clientId"
     }
 
     init(defaults: UserDefaults = .standard) {
@@ -47,5 +52,12 @@ final class AppSettings: ObservableObject {
         notificationsEnabled = defaults.bool(forKey: Keys.notifications)
         appearance = AppAppearance(rawValue: defaults.string(forKey: Keys.appearance) ?? "") ?? .system
         hasOnboarded = defaults.bool(forKey: Keys.onboarded)
+        if let existing = defaults.string(forKey: Keys.clientId) {
+            clientId = existing
+        } else {
+            let generated = UUID().uuidString
+            defaults.set(generated, forKey: Keys.clientId)
+            clientId = generated
+        }
     }
 }

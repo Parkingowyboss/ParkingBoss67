@@ -6,10 +6,12 @@ import SwiftUI
 /// (Roadmap Steps 8, 9, 10, 11, 13, 14.)
 struct MapScreen: View {
     @EnvironmentObject private var locationManager: LocationManager
+    @EnvironmentObject private var settings: AppSettings
     @StateObject private var viewModel = MapViewModel()
 
     @State private var region = MapScreen.warsawRegion
     @State private var selected: Location?
+    @State private var selectedSpace: ParkingSpace?
     @State private var recenter: CLLocationCoordinate2D?
     @State private var showSearch = false
 
@@ -21,19 +23,37 @@ struct MapScreen: View {
     var body: some View {
         ClusteredMapView(
             locations: viewModel.visibleLocations,
+            spaces: viewModel.spaces,
             initialRegion: Self.warsawRegion,
             recenter: recenter,
             onRegionChange: { newRegion in
                 region = newRegion
-                Task { await viewModel.loadIfMoved(center: newRegion.center, radius: radius(for: newRegion)) }
+                Task {
+                    await viewModel.loadIfMoved(center: newRegion.center, radius: radius(for: newRegion))
+                    await viewModel.loadSpaces(for: newRegion)
+                }
             },
             onSelect: { selected = $0 },
+            onSelectSpace: { selectedSpace = $0 },
             onRecentered: { recenter = nil }
         )
         .ignoresSafeArea(edges: .bottom)
         .overlay(alignment: .top) { topBar }
         .overlay(alignment: .bottom) { statusBar }
         .sheet(item: $selected) { LocationDetailSheet(location: $0) }
+        .sheet(item: $selectedSpace) { space in
+            SpaceReportSheet(space: space) { status in
+                do {
+                    let updated = try await APIClient.shared.report(
+                        spaceId: space.id, status: status, clientId: settings.clientId
+                    )
+                    viewModel.apply(updated)
+                    return updated
+                } catch {
+                    return nil
+                }
+            }
+        }
         .sheet(isPresented: $showSearch) {
             SearchScreen { coordinate, location in
                 showSearch = false
@@ -47,6 +67,7 @@ struct MapScreen: View {
         .task {
             locationManager.requestPermission()
             await viewModel.load(center: region.center, radius: radius(for: region))
+            await viewModel.loadSpaces(for: region)
         }
     }
 
@@ -79,6 +100,12 @@ struct MapScreen: View {
                 .padding(.bottom, 24)
         } else if let error = viewModel.errorMessage {
             Text(error)
+                .font(.footnote)
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .background(.thinMaterial, in: Capsule())
+                .padding(.bottom, 24)
+        } else if !viewModel.shouldShowSpaces(for: region) {
+            Label("Przybliż, aby zobaczyć pojedyncze miejsca", systemImage: "plus.magnifyingglass")
                 .font(.footnote)
                 .padding(.horizontal, 12).padding(.vertical, 8)
                 .background(.thinMaterial, in: Capsule())

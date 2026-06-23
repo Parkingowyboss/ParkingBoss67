@@ -10,16 +10,47 @@ final class LocationAnnotation: NSObject, MKAnnotation {
     init(_ location: Location) { self.location = location }
 }
 
+/// MKAnnotation wrapper around an individual stall.
+final class SpaceAnnotation: NSObject, MKAnnotation {
+    let space: ParkingSpace
+    var coordinate: CLLocationCoordinate2D { space.coordinate }
+    var title: String? { space.title }
+    init(_ space: ParkingSpace) { self.space = space }
+}
+
+/// Cache of small colored dot images, one per status, for stall annotations.
+private enum SpaceDot {
+    static let cache = NSCache<NSString, UIImage>()
+
+    static func image(for color: UIColor, diameter: CGFloat = 12) -> UIImage {
+        let key = "\(color.hashValue)-\(diameter)" as NSString
+        if let cached = cache.object(forKey: key) { return cached }
+        let size = CGSize(width: diameter, height: diameter)
+        let image = UIGraphicsImageRenderer(size: size).image { ctx in
+            color.setFill()
+            ctx.cgContext.fillEllipse(in: CGRect(origin: .zero, size: size))
+            UIColor.white.setStroke()
+            ctx.cgContext.setLineWidth(1.5)
+            ctx.cgContext.strokeEllipse(in: CGRect(origin: .zero, size: size).insetBy(dx: 0.75, dy: 0.75))
+        }
+        cache.setObject(image, forKey: key)
+        return image
+    }
+}
+
 /// MKMapView wrapped for SwiftUI to get real marker clustering
 /// (`MKClusterAnnotation`), which the SwiftUI `Map` does not provide.
 /// (Roadmap Step 10.)
 struct ClusteredMapView: UIViewRepresentable {
     var locations: [Location]
+    /// Individual stalls; rendered as colored dots, no clustering.
+    var spaces: [ParkingSpace] = []
     let initialRegion: MKCoordinateRegion
     /// When set, the map animates to this coordinate, then calls `onRecentered`.
     var recenter: CLLocationCoordinate2D?
     var onRegionChange: (MKCoordinateRegion) -> Void
     var onSelect: (Location) -> Void
+    var onSelectSpace: (ParkingSpace) -> Void = { _ in }
     var onRecentered: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -38,6 +69,7 @@ struct ClusteredMapView: UIViewRepresentable {
             MKMarkerAnnotationView.self,
             forAnnotationViewWithReuseIdentifier: MKMapViewDefaultClusterAnnotationViewReuseIdentifier
         )
+        map.register(MKAnnotationView.self, forAnnotationViewWithReuseIdentifier: "space")
 
         let tracking = MKUserTrackingButton(mapView: map)
         tracking.translatesAutoresizingMaskIntoConstraints = false
@@ -55,6 +87,7 @@ struct ClusteredMapView: UIViewRepresentable {
     func updateUIView(_ map: MKMapView, context: Context) {
         context.coordinator.parent = self
         context.coordinator.sync(locations: locations, on: map)
+        context.coordinator.syncSpaces(spaces, on: map)
         if let recenter, context.coordinator.shouldRecenter(to: recenter) {
             let region = MKCoordinateRegion(
                 center: recenter,
@@ -70,6 +103,8 @@ struct ClusteredMapView: UIViewRepresentable {
         var parent: ClusteredMapView
         var lastRecenter: CLLocationCoordinate2D?
         private var currentIDs: Set<String> = []
+        // Keyed by id+status so a status change re-renders the dot.
+        private var currentSpaceKeys: Set<String> = []
 
         init(_ parent: ClusteredMapView) { self.parent = parent }
 
@@ -89,6 +124,16 @@ struct ClusteredMapView: UIViewRepresentable {
             map.addAnnotations(locations.map(LocationAnnotation.init))
         }
 
+        /// Replace stall annotations when the id+status set changes.
+        func syncSpaces(_ spaces: [ParkingSpace], on map: MKMapView) {
+            let newKeys = Set(spaces.map { "\($0.id):\($0.status.rawValue)" })
+            if newKeys == currentSpaceKeys { return }
+            currentSpaceKeys = newKeys
+            let existing = map.annotations.compactMap { $0 as? SpaceAnnotation }
+            map.removeAnnotations(existing)
+            map.addAnnotations(spaces.map(SpaceAnnotation.init))
+        }
+
         func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
             parent.onRegionChange(mapView.region)
         }
@@ -103,6 +148,16 @@ struct ClusteredMapView: UIViewRepresentable {
                 ) as! MKMarkerAnnotationView
                 view.markerTintColor = .darkGray
                 view.glyphText = "\(cluster.memberAnnotations.count)"
+                return view
+            }
+
+            if let space = annotation as? SpaceAnnotation {
+                let view = mapView.dequeueReusableAnnotationView(withIdentifier: "space", for: space)
+                view.image = SpaceDot.image(for: UIColor(space.space.status.color))
+                view.canShowCallout = false
+                // Draw every stall — no decluttering — so all spaces are highlighted.
+                view.collisionMode = .none
+                view.displayPriority = .required
                 return view
             }
 
@@ -130,6 +185,9 @@ struct ClusteredMapView: UIViewRepresentable {
             } else if let loc = view.annotation as? LocationAnnotation {
                 parent.onSelect(loc.location)
                 mapView.deselectAnnotation(loc, animated: false)
+            } else if let space = view.annotation as? SpaceAnnotation {
+                parent.onSelectSpace(space.space)
+                mapView.deselectAnnotation(space, animated: false)
             }
         }
     }

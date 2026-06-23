@@ -71,6 +71,33 @@ struct APIClient {
         try await get(path: "/locations/\(id)", query: [])
     }
 
+    // MARK: - Individual stalls
+
+    /// Stalls inside a map rectangle. `bbox` is (minLng, minLat, maxLng, maxLat).
+    func spaces(
+        bbox: (minLng: Double, minLat: Double, maxLng: Double, maxLat: Double),
+        statuses: [SpaceStatus]? = nil,
+        limit: Int = 2000
+    ) async throws -> [ParkingSpace] {
+        var items = [
+            URLQueryItem(name: "bbox", value: "\(bbox.minLng),\(bbox.minLat),\(bbox.maxLng),\(bbox.maxLat)"),
+            URLQueryItem(name: "limit", value: String(limit)),
+        ]
+        if let statuses, !statuses.isEmpty {
+            items.append(URLQueryItem(name: "status", value: statuses.map(\.rawValue).joined(separator: ",")))
+        }
+        let response: SpaceListResponse = try await get(path: "/spaces", query: items)
+        return response.items
+    }
+
+    /// Submit a crowd-sourced occupancy report; returns the updated stall.
+    func report(spaceId: String, status: SpaceStatus, clientId: String) async throws -> ParkingSpace {
+        try await post(path: "/spaces/\(spaceId)/report", body: [
+            "status": status.rawValue,
+            "clientId": clientId,
+        ])
+    }
+
     // MARK: - Core
 
     private func get<T: Decodable>(path: String, query: [URLQueryItem]) async throws -> T {
@@ -80,8 +107,21 @@ struct APIClient {
         components.queryItems = query.isEmpty ? nil : query
         guard let url = components.url else { throw APIError.badURL }
 
+        return try await send(request: URLRequest(url: url))
+    }
+
+    private func post<T: Decodable>(path: String, body: [String: Any]) async throws -> T {
+        let url = baseURL.appendingPathComponent(path)
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        return try await send(request: request)
+    }
+
+    private func send<T: Decodable>(request: URLRequest) async throws -> T {
         do {
-            let (data, response) = try await session.data(from: url)
+            let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else { throw APIError.http(-1) }
             guard (200..<300).contains(http.statusCode) else { throw APIError.http(http.statusCode) }
             do {

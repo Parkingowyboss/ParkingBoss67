@@ -5,6 +5,7 @@ import compression from 'compression';
 import rateLimit from 'express-rate-limit';
 import { config } from './config.js';
 import { router as locationsRouter } from './locations/routes.js';
+import { router as spacesRouter } from './spaces/routes.js';
 import { pool } from './db/pool.js';
 
 export function createApp() {
@@ -40,6 +41,7 @@ export function createApp() {
   });
 
   app.use('/locations', locationsRouter);
+  app.use('/spaces', spacesRouter);
 
   app.use((_req, res) => res.status(404).json({ error: 'not found' }));
 
