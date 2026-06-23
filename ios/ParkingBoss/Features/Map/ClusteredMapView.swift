@@ -2,6 +2,12 @@ import MapKit
 import SwiftUI
 import UIKit
 
+private extension Comparable {
+    func clamped(to range: ClosedRange<Self>) -> Self {
+        min(max(self, range.lowerBound), range.upperBound)
+    }
+}
+
 /// MKAnnotation wrapper around a `Location`.
 final class LocationAnnotation: NSObject, MKAnnotation {
     let location: Location
@@ -48,10 +54,18 @@ struct ClusteredMapView: UIViewRepresentable {
     let initialRegion: MKCoordinateRegion
     /// When set, the map animates to this coordinate, then calls `onRecentered`.
     var recenter: CLLocationCoordinate2D?
+    /// A zoom request from the +/- buttons; `factor` < 1 zooms in, > 1 zooms out.
+    var zoom: ZoomCommand?
     var onRegionChange: (MKCoordinateRegion) -> Void
     var onSelect: (Location) -> Void
     var onSelectSpace: (ParkingSpace) -> Void = { _ in }
     var onRecentered: () -> Void
+    var onZoomHandled: () -> Void = {}
+
+    struct ZoomCommand: Equatable {
+        let id: UUID
+        let factor: Double
+    }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -97,11 +111,22 @@ struct ClusteredMapView: UIViewRepresentable {
             context.coordinator.lastRecenter = recenter
             DispatchQueue.main.async { onRecentered() }
         }
+
+        if let zoom, zoom.id != context.coordinator.lastZoomId {
+            context.coordinator.lastZoomId = zoom.id
+            var region = map.region
+            let lat = (region.span.latitudeDelta * zoom.factor).clamped(to: 0.0009...60)
+            let lng = (region.span.longitudeDelta * zoom.factor).clamped(to: 0.0009...60)
+            region.span = MKCoordinateSpan(latitudeDelta: lat, longitudeDelta: lng)
+            map.setRegion(region, animated: true)
+            DispatchQueue.main.async { onZoomHandled() }
+        }
     }
 
     final class Coordinator: NSObject, MKMapViewDelegate {
         var parent: ClusteredMapView
         var lastRecenter: CLLocationCoordinate2D?
+        var lastZoomId: UUID?
         private var currentIDs: Set<String> = []
         // Keyed by id+status so a status change re-renders the dot.
         private var currentSpaceKeys: Set<String> = []

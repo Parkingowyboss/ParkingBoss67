@@ -14,6 +14,7 @@ struct MapScreen: View {
     @State private var selectedSpace: ParkingSpace?
     @State private var recenter: CLLocationCoordinate2D?
     @State private var showSearch = false
+    @State private var zoomCommand: ClusteredMapView.ZoomCommand?
 
     static let warsawRegion = MKCoordinateRegion(
         center: LocationManager.warsaw,
@@ -26,6 +27,7 @@ struct MapScreen: View {
             spaces: viewModel.spaces,
             initialRegion: Self.warsawRegion,
             recenter: recenter,
+            zoom: zoomCommand,
             onRegionChange: { newRegion in
                 region = newRegion
                 Task {
@@ -35,10 +37,12 @@ struct MapScreen: View {
             },
             onSelect: { selected = $0 },
             onSelectSpace: { selectedSpace = $0 },
-            onRecentered: { recenter = nil }
+            onRecentered: { recenter = nil },
+            onZoomHandled: { zoomCommand = nil }
         )
         .ignoresSafeArea(edges: .bottom)
         .overlay(alignment: .top) { topBar }
+        .overlay(alignment: .trailing) { zoomButtons }
         .overlay(alignment: .bottom) { statusBar }
         .sheet(item: $selected) { LocationDetailSheet(location: $0) }
         .sheet(item: $selectedSpace) { space in
@@ -69,6 +73,31 @@ struct MapScreen: View {
             await viewModel.load(center: region.center, radius: radius(for: region))
             await viewModel.loadSpaces(for: region)
         }
+    }
+
+    private var zoomButtons: some View {
+        VStack(spacing: 0) {
+            zoomButton(systemImage: "plus", factor: 0.5, accessibility: "Przybliż")
+            Divider().frame(width: 36)
+            zoomButton(systemImage: "minus", factor: 2.0, accessibility: "Oddal")
+        }
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color(.separator), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.15), radius: 3, y: 1)
+        .padding(.trailing, 12)
+    }
+
+    private func zoomButton(systemImage: String, factor: Double, accessibility: String) -> some View {
+        Button {
+            zoomCommand = .init(id: UUID(), factor: factor)
+        } label: {
+            Image(systemName: systemImage)
+                .font(.title3.weight(.semibold))
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(accessibility)
     }
 
     private var topBar: some View {
