@@ -12,6 +12,9 @@ from common import WARSAW_BBOX, connect, upsert_locations
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 
+# Overpass rejects the default python-requests UA with HTTP 406.
+HEADERS = {"User-Agent": "ParkingBoss/0.1 (+https://github.com/Parkingowyboss/ParkingBoss67)"}
+
 # amenity=parking -> parking, amenity=fuel -> gas_station
 OVERPASS_QUERY = """
 [out:json][timeout:120];
@@ -33,7 +36,7 @@ def _bbox_str():
 def fetch():
     query = OVERPASS_QUERY.format(bbox=_bbox_str())
     print("[osm] querying Overpass API...")
-    resp = requests.post(OVERPASS_URL, data={"data": query}, timeout=180)
+    resp = requests.post(OVERPASS_URL, data={"data": query}, headers=HEADERS, timeout=180)
     resp.raise_for_status()
     return resp.json().get("elements", [])
 

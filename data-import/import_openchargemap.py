@@ -16,6 +16,8 @@ from common import WARSAW_BBOX, connect, upsert_locations
 
 OCM_URL = "https://api.openchargemap.io/v3/poi"
 
+HEADERS = {"User-Agent": "ParkingBoss/0.1 (+https://github.com/Parkingowyboss/ParkingBoss67)"}
+
 
 def fetch():
     api_key = os.environ.get("OCM_API_KEY", "")
@@ -33,7 +35,7 @@ def fetch():
         "key": api_key,
     }
     print("[ocm] querying OpenChargeMap...")
-    resp = requests.get(OCM_URL, params=params, timeout=120)
+    resp = requests.get(OCM_URL, params=params, headers=HEADERS, timeout=120)
     resp.raise_for_status()
     return resp.json()
 
