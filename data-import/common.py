@@ -1,4 +1,5 @@
 """Shared helpers for ParkingBoss data import scripts."""
+import math
 import os
 
 import psycopg
@@ -17,6 +18,62 @@ WARSAW_BBOX = (52.03, 20.80, 52.40, 21.30)
 
 def connect():
     return psycopg.connect(DATABASE_URL)
+
+
+# ---------------------------------------------------------------------------
+# Small-area geometry helpers (local equirectangular projection in metres).
+# Accurate enough for individual parking-stall footprints.
+# ---------------------------------------------------------------------------
+
+_M_PER_DEG_LAT = 111_320.0
+
+
+def local_frame(lat0, lon0):
+    """Return (to_m, to_geo) converters around an anchor point."""
+    cos0 = math.cos(math.radians(lat0))
+
+    def to_m(lat, lon):
+        return ((lon - lon0) * _M_PER_DEG_LAT * cos0, (lat - lat0) * _M_PER_DEG_LAT)
+
+    def to_geo(x, y):
+        return (lat0 + y / _M_PER_DEG_LAT, lon0 + x / (_M_PER_DEG_LAT * cos0))
+
+    return to_m, to_geo
+
+
+def rect_ring(cx, cy, ux, uy, length, width):
+    """Corners of a rectangle centred at (cx,cy) in metres.
+
+    (ux,uy) is the unit long-axis direction; `length` runs along it, `width`
+    across it. Returns 5 (x,y) points (closed ring).
+    """
+    n = math.hypot(ux, uy) or 1.0
+    ux, uy = ux / n, uy / n
+    nx, ny = -uy, ux  # perpendicular unit
+    hl, hw = length / 2.0, width / 2.0
+    pts = [
+        (cx + ux * hl + nx * hw, cy + uy * hl + ny * hw),
+        (cx + ux * hl - nx * hw, cy + uy * hl - ny * hw),
+        (cx - ux * hl - nx * hw, cy - uy * hl - ny * hw),
+        (cx - ux * hl + nx * hw, cy - uy * hl + ny * hw),
+    ]
+    pts.append(pts[0])
+    return pts
+
+
+def polygon_wkt(coords):
+    """WKT POLYGON from [(lat,lng), ...] (auto-closes the ring)."""
+    ring = list(coords)
+    if ring[0] != ring[-1]:
+        ring.append(ring[0])
+    body = ", ".join(f"{lng} {lat}" for lat, lng in ring)
+    return f"POLYGON(({body}))"
+
+
+def centroid(coords):
+    """Average (lat, lng) of a list of (lat, lng) points."""
+    n = len(coords)
+    return (sum(c[0] for c in coords) / n, sum(c[1] for c in coords) / n)
 
 
 def upsert_locations(conn, rows):

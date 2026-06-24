@@ -33,9 +33,19 @@ struct ParkingSpace: Identifiable, Codable, Equatable {
     let fee: Bool?
     let disabled: Bool?
     let status: SpaceStatus
+    /// Footprint as [[lng, lat], ...] (closed ring) for drawing the real stall shape.
+    let polygon: [[Double]]?
 
     var coordinate: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: lat, longitude: lng)
+    }
+
+    /// The stall outline as map coordinates, or nil if no footprint.
+    var ringCoordinates: [CLLocationCoordinate2D]? {
+        guard let polygon, polygon.count >= 4 else { return nil }
+        return polygon.compactMap { pair in
+            pair.count == 2 ? CLLocationCoordinate2D(latitude: pair[1], longitude: pair[0]) : nil
+        }
     }
 
     var title: String {

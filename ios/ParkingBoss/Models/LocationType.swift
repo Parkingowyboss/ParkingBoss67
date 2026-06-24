@@ -44,10 +44,10 @@ enum LocationType: String, Codable, CaseIterable, Identifiable {
         }
     }
 
-    /// Filter groups shown to the user (parking public+private collapse into one chip).
+    /// Filter chips for the facility pins. Parking itself is shown as individual
+    /// stall footprints, so it isn't a facility chip.
     static var filterGroups: [(label: String, types: [LocationType])] {
         [
-            ("Parking", [.parkingPublic, .parkingPrivate]),
             ("Ładowarka EV", [.evCharger]),
             ("Stacja paliw", [.gasStation]),
         ]

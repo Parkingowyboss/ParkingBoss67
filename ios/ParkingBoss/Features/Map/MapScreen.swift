@@ -23,7 +23,11 @@ struct MapScreen: View {
 
     var body: some View {
         ClusteredMapView(
-            locations: viewModel.visibleLocations,
+            // Parking is represented by the stall footprints now; only EV
+            // chargers and gas stations remain as map pins.
+            locations: viewModel.visibleLocations.filter {
+                $0.type == .evCharger || $0.type == .gasStation
+            },
             spaces: viewModel.spaces,
             initialRegion: Self.warsawRegion,
             recenter: recenter,

@@ -94,8 +94,14 @@ CREATE TABLE IF NOT EXISTS parking_spaces (
   status_source VARCHAR(16),          -- which channel last set status (e.g. 'user')
   status_updated_at TIMESTAMPTZ,
   last_updated  TIMESTAMPTZ NOT NULL DEFAULT now(),
-  geom          GEOMETRY(Point, 4326) NOT NULL
+  geom          GEOMETRY(Point, 4326) NOT NULL,
+  -- The actual stall footprint: real OSM polygon for mapped areas, or a
+  -- synthetic oriented rectangle for nodes / on-street stalls.
+  outline       GEOMETRY(Polygon, 4326)
 );
+
+-- Older databases: add the column if the table predates it.
+ALTER TABLE parking_spaces ADD COLUMN IF NOT EXISTS outline GEOMETRY(Polygon, 4326);
 
 -- Viewport queries: GET /spaces?bbox= relies on this.
 CREATE INDEX IF NOT EXISTS parking_spaces_geom_idx ON parking_spaces USING GIST (geom);

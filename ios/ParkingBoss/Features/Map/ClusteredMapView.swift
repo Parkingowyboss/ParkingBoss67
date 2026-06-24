@@ -16,40 +16,16 @@ final class LocationAnnotation: NSObject, MKAnnotation {
     init(_ location: Location) { self.location = location }
 }
 
-/// MKAnnotation wrapper around an individual stall.
-final class SpaceAnnotation: NSObject, MKAnnotation {
-    let space: ParkingSpace
-    var coordinate: CLLocationCoordinate2D { space.coordinate }
-    var title: String? { space.title }
-    init(_ space: ParkingSpace) { self.space = space }
+/// MKPolygon carrying the stall it was built from, for styling + tap selection.
+final class SpacePolygon: MKPolygon {
+    var space: ParkingSpace?
 }
 
-/// Cache of small colored dot images, one per status, for stall annotations.
-private enum SpaceDot {
-    static let cache = NSCache<NSString, UIImage>()
-
-    static func image(for color: UIColor, diameter: CGFloat = 12) -> UIImage {
-        let key = "\(color.hashValue)-\(diameter)" as NSString
-        if let cached = cache.object(forKey: key) { return cached }
-        let size = CGSize(width: diameter, height: diameter)
-        let image = UIGraphicsImageRenderer(size: size).image { ctx in
-            color.setFill()
-            ctx.cgContext.fillEllipse(in: CGRect(origin: .zero, size: size))
-            UIColor.white.setStroke()
-            ctx.cgContext.setLineWidth(1.5)
-            ctx.cgContext.strokeEllipse(in: CGRect(origin: .zero, size: size).insetBy(dx: 0.75, dy: 0.75))
-        }
-        cache.setObject(image, forKey: key)
-        return image
-    }
-}
-
-/// MKMapView wrapped for SwiftUI to get real marker clustering
-/// (`MKClusterAnnotation`), which the SwiftUI `Map` does not provide.
-/// (Roadmap Step 10.)
+/// MKMapView wrapped for SwiftUI: facility marker clustering plus individual
+/// parking stalls drawn as real, color-coded polygon footprints.
 struct ClusteredMapView: UIViewRepresentable {
     var locations: [Location]
-    /// Individual stalls; rendered as colored dots, no clustering.
+    /// Individual stalls; drawn as oriented rectangles colored by status.
     var spaces: [ParkingSpace] = []
     let initialRegion: MKCoordinateRegion
     /// When set, the map animates to this coordinate, then calls `onRecentered`.
@@ -83,7 +59,15 @@ struct ClusteredMapView: UIViewRepresentable {
             MKMarkerAnnotationView.self,
             forAnnotationViewWithReuseIdentifier: MKMapViewDefaultClusterAnnotationViewReuseIdentifier
         )
-        map.register(MKAnnotationView.self, forAnnotationViewWithReuseIdentifier: "space")
+
+        // Tap-to-select a stall (overlays don't get didSelect).
+        let tap = UITapGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleTap(_:))
+        )
+        tap.delegate = context.coordinator
+        tap.cancelsTouchesInView = false
+        map.addGestureRecognizer(tap)
 
         let tracking = MKUserTrackingButton(mapView: map)
         tracking.translatesAutoresizingMaskIntoConstraints = false
@@ -123,13 +107,13 @@ struct ClusteredMapView: UIViewRepresentable {
         }
     }
 
-    final class Coordinator: NSObject, MKMapViewDelegate {
+    final class Coordinator: NSObject, MKMapViewDelegate, UIGestureRecognizerDelegate {
         var parent: ClusteredMapView
         var lastRecenter: CLLocationCoordinate2D?
         var lastZoomId: UUID?
         private var currentIDs: Set<String> = []
-        // Keyed by id+status so a status change re-renders the dot.
         private var currentSpaceKeys: Set<String> = []
+        private var spacePolys: [SpacePolygon] = []
 
         init(_ parent: ClusteredMapView) { self.parent = parent }
 
@@ -149,14 +133,33 @@ struct ClusteredMapView: UIViewRepresentable {
             map.addAnnotations(locations.map(LocationAnnotation.init))
         }
 
-        /// Replace stall annotations when the id+status set changes.
+        /// Replace stall polygons when the id+status set changes.
         func syncSpaces(_ spaces: [ParkingSpace], on map: MKMapView) {
             let newKeys = Set(spaces.map { "\($0.id):\($0.status.rawValue)" })
             if newKeys == currentSpaceKeys { return }
             currentSpaceKeys = newKeys
-            let existing = map.annotations.compactMap { $0 as? SpaceAnnotation }
-            map.removeAnnotations(existing)
-            map.addAnnotations(spaces.map(SpaceAnnotation.init))
+            map.removeOverlays(spacePolys)
+            var polys: [SpacePolygon] = []
+            for s in spaces {
+                guard let ring = s.ringCoordinates, ring.count >= 3 else { continue }
+                let poly = SpacePolygon(coordinates: ring, count: ring.count)
+                poly.space = s
+                polys.append(poly)
+            }
+            spacePolys = polys
+            map.addOverlays(polys, level: .aboveRoads)
+        }
+
+        func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+            if let sp = overlay as? SpacePolygon {
+                let renderer = MKPolygonRenderer(polygon: sp)
+                let color = UIColor(sp.space?.status.color ?? Color.gray)
+                renderer.fillColor = color.withAlphaComponent(0.7)
+                renderer.strokeColor = UIColor.white.withAlphaComponent(0.9)
+                renderer.lineWidth = 0.6
+                return renderer
+            }
+            return MKOverlayRenderer(overlay: overlay)
         }
 
         func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
@@ -176,16 +179,6 @@ struct ClusteredMapView: UIViewRepresentable {
                 return view
             }
 
-            if let space = annotation as? SpaceAnnotation {
-                let view = mapView.dequeueReusableAnnotationView(withIdentifier: "space", for: space)
-                view.image = SpaceDot.image(for: UIColor(space.space.status.color))
-                view.canShowCallout = false
-                // Draw every stall — no decluttering — so all spaces are highlighted.
-                view.collisionMode = .none
-                view.displayPriority = .required
-                return view
-            }
-
             guard let loc = annotation as? LocationAnnotation else { return nil }
             let view = mapView.dequeueReusableAnnotationView(
                 withIdentifier: MKMapViewDefaultAnnotationViewReuseIdentifier,
@@ -200,7 +193,6 @@ struct ClusteredMapView: UIViewRepresentable {
 
         func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
             if let cluster = view.annotation as? MKClusterAnnotation {
-                // Zoom into the cluster.
                 let span = MKCoordinateSpan(
                     latitudeDelta: max(mapView.region.span.latitudeDelta / 3, 0.001),
                     longitudeDelta: max(mapView.region.span.longitudeDelta / 3, 0.001)
@@ -210,10 +202,39 @@ struct ClusteredMapView: UIViewRepresentable {
             } else if let loc = view.annotation as? LocationAnnotation {
                 parent.onSelect(loc.location)
                 mapView.deselectAnnotation(loc, animated: false)
-            } else if let space = view.annotation as? SpaceAnnotation {
-                parent.onSelectSpace(space.space)
-                mapView.deselectAnnotation(space, animated: false)
             }
+        }
+
+        // MARK: - Stall tap selection
+
+        @objc func handleTap(_ gr: UITapGestureRecognizer) {
+            guard let map = gr.view as? MKMapView else { return }
+            let pt = gr.location(in: map)
+
+            // Let markers and on-map controls handle their own taps.
+            var hit = map.hitTest(pt, with: nil)
+            while let v = hit {
+                if v is MKAnnotationView || v is UIControl { return }
+                hit = v.superview
+            }
+
+            // Stalls are tiny — pick the nearest stall within a touch tolerance.
+            var best: (SpacePolygon, CGFloat)?
+            for poly in spacePolys where poly.space != nil {
+                let center = map.convert(poly.space!.coordinate, toPointTo: map)
+                let d = hypot(center.x - pt.x, center.y - pt.y)
+                if d < (best?.1 ?? .greatestFiniteMagnitude) { best = (poly, d) }
+            }
+            if let (poly, d) = best, d <= 26, let space = poly.space {
+                parent.onSelectSpace(space)
+            }
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+        ) -> Bool {
+            true
         }
     }
 }

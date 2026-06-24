@@ -17,15 +17,20 @@ import sys
 
 import requests
 
-from common import WARSAW_BBOX, connect
+from common import WARSAW_BBOX, connect, local_frame, polygon_wkt, rect_ring
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 HEADERS = {"User-Agent": "ParkingBoss/0.1 (+https://github.com/Parkingowyboss/ParkingBoss67)"}
 
 # Along-kerb footprint per vehicle, in metres, by orientation.
 SLOT_LEN = {"parallel": 5.2, "diagonal": 3.1, "perpendicular": 2.6}
-# Lateral offset from the road centreline to the parked-car row, in metres.
-OFFSET_M = 4.0
+# Per-orientation stall rectangle: (length along stall long-axis, width), metres,
+# and lateral offset from the road centreline to the stall centre.
+RECT = {
+    "parallel":      {"length": 5.0, "width": 2.2, "offset": 3.0},
+    "perpendicular": {"length": 4.8, "width": 2.4, "offset": 5.8},
+    "diagonal":      {"length": 4.6, "width": 2.3, "offset": 4.2},
+}
 # Sanity cap on stalls generated per side of one way.
 MAX_PER_SIDE = 250
 
@@ -137,20 +142,22 @@ def _to_geo(x, y, lat0, lon0, cos0):
 
 
 def stalls_for_side(geometry, side, cfg, way_id):
-    """Place evenly-spaced, side-offset stall points along a way."""
+    """Place evenly-spaced, side-offset, oriented stall rectangles along a way."""
     pts, lat0, lon0, cos0 = _to_local(geometry)
+    to_geo = local_frame(lat0, lon0)[1]
     # Cumulative segment lengths.
     seglen, total = [], 0.0
     for i in range(len(pts) - 1):
         dx = pts[i + 1][0] - pts[i][0]
         dy = pts[i + 1][1] - pts[i][1]
-        d = math.hypot(dx, dy)
-        seglen.append(d)
-        total += d
+        seglen.append(math.hypot(dx, dy))
+        total += seglen[-1]
     if total < 1.0:
         return []
 
-    slot = SLOT_LEN[cfg["orientation"]]
+    orient = cfg["orientation"]
+    rect = RECT[orient]
+    slot = SLOT_LEN[orient]
     n = cfg["capacity"] if cfg["capacity"] else int(total // slot)
     n = max(0, min(n, MAX_PER_SIDE))
     if n == 0:
@@ -161,7 +168,6 @@ def stalls_for_side(geometry, side, cfg, way_id):
     rows = []
     for i in range(n):
         target = (i + 0.5) * spacing
-        # Walk to the segment containing `target`.
         acc, seg = 0.0, 0
         while seg < len(seglen) - 1 and acc + seglen[seg] < target:
             acc += seglen[seg]
@@ -172,16 +178,28 @@ def stalls_for_side(geometry, side, cfg, way_id):
         x1, y1 = pts[seg + 1]
         px = x0 + (x1 - x0) * frac
         py = y0 + (y1 - y0) * frac
-        # Unit direction of travel, then left/right normal.
+        # Unit travel direction and the normal pointing to this side.
         dx, dy = (x1 - x0) / seg_d, (y1 - y0) / seg_d
-        nx, ny = (-dy * sign, dx * sign)  # left normal is (-dy, dx)
-        ox, oy = px + nx * OFFSET_M, py + ny * OFFSET_M
-        lat, lng = _to_geo(ox, oy, lat0, lon0, cos0)
+        nx, ny = (-dy * sign, dx * sign)
+        # Stall centre, offset off the centreline.
+        cx = px + nx * rect["offset"]
+        cy = py + ny * rect["offset"]
+        # Long-axis direction by orientation.
+        if orient == "perpendicular":
+            ux, uy = nx, ny                      # stall points away from road
+        elif orient == "diagonal":
+            ux, uy = dx + nx, dy + ny            # 45° between travel and normal
+        else:
+            ux, uy = dx, dy                      # parallel: along the road
+        ring_m = rect_ring(cx, cy, ux, uy, rect["length"], rect["width"])
+        ring = [to_geo(x, y) for x, y in ring_m]
+        clat, clng = to_geo(cx, cy)
         rows.append({
-            "lat": lat,
-            "lng": lng,
+            "lat": clat,
+            "lng": clng,
             "source": "street",
             "source_id": f"street/way/{way_id}/{side}/{i}",
+            "outline": polygon_wkt(ring),
         })
     return rows
 
@@ -203,8 +221,8 @@ def build(elements):
 
 
 INSERT = """
-    INSERT INTO parking_spaces (lat, lng, source, source_id)
-    VALUES (%(lat)s, %(lng)s, %(source)s, %(source_id)s);
+    INSERT INTO parking_spaces (lat, lng, source, source_id, outline)
+    VALUES (%(lat)s, %(lng)s, %(source)s, %(source_id)s, ST_GeomFromText(%(outline)s, 4326));
 """
 
 

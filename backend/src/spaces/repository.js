@@ -3,8 +3,23 @@ import { query } from '../db/pool.js';
 export const SPACE_STATUSES = ['free', 'occupied', 'unknown'];
 
 const SELECT_COLS = `
-  id, lat, lng, ref, fee, disabled, status, status_updated_at
+  id, lat, lng, ref, fee, disabled, status, status_updated_at,
+  ST_AsGeoJSON(outline) AS outline
 `;
+
+// Turn a DB row into the API shape, parsing the outline ring into [[lng,lat],...].
+function toApi(row) {
+  let polygon = null;
+  if (row.outline) {
+    try {
+      polygon = JSON.parse(row.outline).coordinates[0];
+    } catch {
+      polygon = null;
+    }
+  }
+  const { outline, ...rest } = row;
+  return { ...rest, polygon };
+}
 
 /**
  * Stalls whose point falls inside the given bounding box.
@@ -27,7 +42,7 @@ export async function findInBbox({ minLng, minLat, maxLng, maxLat, statuses, lim
     LIMIT $${params.length};
   `;
   const { rows } = await query(sql, params);
-  return rows;
+  return rows.map(toApi);
 }
 
 /** Count stalls in a bbox, by status — lets the client decide whether to render. */
@@ -66,5 +81,5 @@ export async function report({ spaceId, status, clientId }) {
      RETURNING ${SELECT_COLS}`,
     [spaceId, status]
   );
-  return rows[0] || null;
+  return rows[0] ? toApi(rows[0]) : null;
 }
