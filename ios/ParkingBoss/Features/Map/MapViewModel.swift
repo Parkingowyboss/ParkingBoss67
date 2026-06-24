@@ -22,6 +22,7 @@ final class MapViewModel: ObservableObject {
 
     private let api: APIClient
     private var lastFetchCenter: CLLocationCoordinate2D?
+    private var lastSpacesRegion: MKCoordinateRegion?
 
     init(api: APIClient = .shared) {
         self.api = api
@@ -77,11 +78,26 @@ final class MapViewModel: ObservableObject {
     }
 
     /// Load stalls for the visible rectangle; clears them when zoomed out.
+    /// Skips re-fetching for small pans/zooms to avoid churn.
     func loadSpaces(for region: MKCoordinateRegion) async {
         guard shouldShowSpaces(for: region) else {
             if !spaces.isEmpty { spaces = [] }
+            lastSpacesRegion = nil
             return
         }
+
+        if let last = lastSpacesRegion, !spaces.isEmpty {
+            let movedLat = abs(last.center.latitude - region.center.latitude)
+            let movedLng = abs(last.center.longitude - region.center.longitude)
+            let zoomChange = abs(last.span.latitudeDelta - region.span.latitudeDelta) / last.span.latitudeDelta
+            // Only refetch on a meaningful pan (>35% of span) or zoom change (>25%).
+            if movedLat < last.span.latitudeDelta * 0.35,
+               movedLng < last.span.longitudeDelta * 0.35,
+               zoomChange < 0.25 {
+                return
+            }
+        }
+        lastSpacesRegion = region
         // Build a bbox from the region, clamped to the backend's max side length.
         let halfLat = min(region.span.latitudeDelta / 2, Self.maxBboxDeg / 2)
         let halfLng = min(region.span.longitudeDelta / 2, Self.maxBboxDeg / 2)

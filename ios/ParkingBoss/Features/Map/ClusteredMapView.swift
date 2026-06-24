@@ -16,9 +16,29 @@ final class LocationAnnotation: NSObject, MKAnnotation {
     init(_ location: Location) { self.location = location }
 }
 
-/// MKPolygon carrying the stall it was built from, for styling + tap selection.
-final class SpacePolygon: MKPolygon {
-    var space: ParkingSpace?
+/// All stalls of one status grouped into a single overlay, so the whole stall
+/// layer is just 3 renderers instead of one per stall.
+final class SpaceMultiPolygon: MKMultiPolygon {
+    var status: SpaceStatus = .unknown
+}
+
+/// Prettier per-status styling for the stall layer.
+private enum StallStyle {
+    static func fill(_ status: SpaceStatus) -> UIColor {
+        switch status {
+        case .free:     return UIColor(red: 0.30, green: 0.78, blue: 0.45, alpha: 0.90)
+        case .occupied: return UIColor(red: 0.95, green: 0.38, blue: 0.36, alpha: 0.88)
+        case .unknown:  return UIColor(red: 0.62, green: 0.66, blue: 0.73, alpha: 0.45)
+        }
+    }
+
+    static func stroke(_ status: SpaceStatus) -> UIColor {
+        switch status {
+        case .free:     return UIColor(red: 0.16, green: 0.55, blue: 0.30, alpha: 0.65)
+        case .occupied: return UIColor(red: 0.70, green: 0.20, blue: 0.18, alpha: 0.60)
+        case .unknown:  return .clear
+        }
+    }
 }
 
 /// MKMapView wrapped for SwiftUI: facility marker clustering plus individual
@@ -113,7 +133,7 @@ struct ClusteredMapView: UIViewRepresentable {
         var lastZoomId: UUID?
         private var currentIDs: Set<String> = []
         private var currentSpaceKeys: Set<String> = []
-        private var spacePolys: [SpacePolygon] = []
+        private var spaceOverlays: [SpaceMultiPolygon] = []
 
         init(_ parent: ClusteredMapView) { self.parent = parent }
 
@@ -133,30 +153,37 @@ struct ClusteredMapView: UIViewRepresentable {
             map.addAnnotations(locations.map(LocationAnnotation.init))
         }
 
-        /// Replace stall polygons when the id+status set changes.
+        /// Rebuild the stall layer (3 grouped overlays) when the id+status set changes.
         func syncSpaces(_ spaces: [ParkingSpace], on map: MKMapView) {
             let newKeys = Set(spaces.map { "\($0.id):\($0.status.rawValue)" })
             if newKeys == currentSpaceKeys { return }
             currentSpaceKeys = newKeys
-            map.removeOverlays(spacePolys)
-            var polys: [SpacePolygon] = []
+
+            var byStatus: [SpaceStatus: [MKPolygon]] = [:]
             for s in spaces {
                 guard let ring = s.ringCoordinates, ring.count >= 3 else { continue }
-                let poly = SpacePolygon(coordinates: ring, count: ring.count)
-                poly.space = s
-                polys.append(poly)
+                byStatus[s.status, default: []].append(MKPolygon(coordinates: ring, count: ring.count))
             }
-            spacePolys = polys
-            map.addOverlays(polys, level: .aboveRoads)
+
+            map.removeOverlays(spaceOverlays)
+            var overlays: [SpaceMultiPolygon] = []
+            // Draw unknown first so free/occupied sit visually on top.
+            for status in [SpaceStatus.unknown, .free, .occupied] {
+                guard let polys = byStatus[status], !polys.isEmpty else { continue }
+                let multi = SpaceMultiPolygon(polys)
+                multi.status = status
+                overlays.append(multi)
+            }
+            spaceOverlays = overlays
+            map.addOverlays(overlays, level: .aboveRoads)
         }
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
-            if let sp = overlay as? SpacePolygon {
-                let renderer = MKPolygonRenderer(polygon: sp)
-                let color = UIColor(sp.space?.status.color ?? Color.gray)
-                renderer.fillColor = color.withAlphaComponent(0.7)
-                renderer.strokeColor = UIColor.white.withAlphaComponent(0.9)
-                renderer.lineWidth = 0.6
+            if let multi = overlay as? SpaceMultiPolygon {
+                let renderer = MKMultiPolygonRenderer(multiPolygon: multi)
+                renderer.fillColor = StallStyle.fill(multi.status)
+                renderer.strokeColor = StallStyle.stroke(multi.status)
+                renderer.lineWidth = multi.status == .unknown ? 0 : 0.5
                 return renderer
             }
             return MKOverlayRenderer(overlay: overlay)
@@ -219,13 +246,13 @@ struct ClusteredMapView: UIViewRepresentable {
             }
 
             // Stalls are tiny — pick the nearest stall within a touch tolerance.
-            var best: (SpacePolygon, CGFloat)?
-            for poly in spacePolys where poly.space != nil {
-                let center = map.convert(poly.space!.coordinate, toPointTo: map)
+            var best: (ParkingSpace, CGFloat)?
+            for space in parent.spaces {
+                let center = map.convert(space.coordinate, toPointTo: map)
                 let d = hypot(center.x - pt.x, center.y - pt.y)
-                if d < (best?.1 ?? .greatestFiniteMagnitude) { best = (poly, d) }
+                if d < (best?.1 ?? .greatestFiniteMagnitude) { best = (space, d) }
             }
-            if let (poly, d) = best, d <= 26, let space = poly.space {
+            if let (space, d) = best, d <= 26 {
                 parent.onSelectSpace(space)
             }
         }
